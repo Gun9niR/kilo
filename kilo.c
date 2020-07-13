@@ -3,12 +3,14 @@
 #include<errno.h>
 #include<stdio.h>
 #include<stdlib.h>
+#include<string.h>
 #include<sys/ioctl.h>
 #include<termios.h>
 #include<unistd.h>
 
 /*** defines ***/
 
+#define KILO_VERSION "0.0.1"
 #define CTRL_KEY(k) ((k) & 0x1f)  //a bit mask that sets the upper 3 bits of the character to 0，which is exactly how CTRL works
 
 /*** data ***/
@@ -113,7 +115,7 @@ int get_window_size(int *rows, int *cols)
     //'C' moves the cursor to the right
     //'B' moves the cursor down. Both commands check the bound
     if(ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
-        if(write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) !=12) return -1;
+        if(write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1;
         editor_read_key();
         return get_cursor_position(rows, cols);
     } else {
@@ -123,37 +125,67 @@ int get_window_size(int *rows, int *cols)
     }
 }
 
+/*** append buffer ***/
+
+struct abuf {
+    char *b;
+    int len;
+};
+
+#define ABUF_INIT {NULL, 0}  //constructor for abuf type
+
+void abAppend(struct abuf *ab, const char *s, int len)
+{
+    char *new = realloc(ab->b, ab->len + len);
+
+    if(new == NULL) return;
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
+
+void abFree(struct abuf *ab)
+{
+    free(ab->b);
+}
+
 /*** output ***/
 
-void editor_draw_rows()
+void editor_draw_rows(struct abuf *ab)
 {
     int y;
     for(y = 0; y < E.screenrows; y++) {
-        write(STDOUT_FILENO, "~", 1);
+        abAppend(ab, "~" , 1);
 
+        //clear each line as we redraw them instead of clearing the entire page
+        abAppend(ab, "\x1b[K", 3); 
         if(y < E.screenrows - 1) {
-            write(STDOUT_FILENO, "\r\n", 2);
+            abAppend(ab, "\r\n", 2);
         }
     }
 }
 
 void editor_refresh_screen()
 {
-    //"x1b" is escape, "\x1b[2J" is an escape sequance
-    //Escape sequences always start with an escape character (27) followed by a [ character. 
-    //Escape sequences instruct the terminal to do various text formatting tasks, such as coloring text, moving the cursor around, and clearing parts of the screen.
-    //'J' clears the screen
-    //'0' clears the screen from the cursor up to the end
-    //'1' clears the scrren up to the cursor
-    //'2' clears the entire screen
-    write(STDOUT_FILENO, "\x1b[2J", 4);
+    
+    
+    struct abuf ab = ABUF_INIT; //use buffer so that we only need to do one write(), avoiding flickering
+
+    //"?25l" hides the cursor when refreshing the screen to prevent flickering
+    abAppend(&ab, "\x1b[?25l", 6);
+
     //'H' positions the cursor. It takes to arguments, specifying the line and column, say "/x1b[1;1H"
     //Line and column number start at 1
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    abAppend(&ab, "\x1b[H", 3);
+    
+    editor_draw_rows(&ab);
 
-    editor_draw_rows();
+    abAppend(&ab, "\x1b[H", 3);
+    //"?25h" shows the cursor after refreshing
+    abAppend(&ab, "\x1b[?25h", 6);
 
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    write(STDOUT_FILENO, ab.b, ab.len);
+    abFree(&ab);
 }
 
 /*** input ***/
