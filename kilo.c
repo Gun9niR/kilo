@@ -21,7 +21,7 @@
 
 #define KILO_VERSION "0.0.1"
 #define KILO_TAB_STOP 8
-
+#define KILO_QUIT_TIMES 3
 #define CTRL_KEY(k) ((k) & 0x1f)  //a bit mask that sets bits 5 and 6 bits of the character to 0，which is exactly how CTRL works
 enum editorKey {
     BACKSPACE = 127,
@@ -54,6 +54,7 @@ struct editor_config {
     int screencols;
     int numrows;
     erow *row;
+    int dirty;
     char *filename;
     char statusmsg[80];
     time_t statusmsg_time;
@@ -62,6 +63,10 @@ struct editor_config {
 
 struct editor_config E;
 
+
+/*** prototypes ***/
+
+void editor_set_status_message(const char *fmt, ...);
 /*** terminal ***/
 
 void die(const char *s) {
@@ -257,6 +262,7 @@ void editor_append_row(char *s, size_t len)
     E.row[at].render = NULL;
     editor_update_row(&E.row[at]);
     E.numrows++;
+    E.dirty++;
 }
 
 void editor_row_insert_char(erow *row, int at, int c)
@@ -267,6 +273,7 @@ void editor_row_insert_char(erow *row, int at, int c)
     row->size++;
     row->chars[at] = c;
     editor_update_row(row);
+    E.dirty++;
 }
 
 /*** editor operations ***/
@@ -323,6 +330,7 @@ void editor_open(char *filename)
     }
     free(line);
     fclose(fp);
+    E.dirty = 0;
 }
 
 void editor_save() 
@@ -333,10 +341,20 @@ void editor_save()
     char *buf = editor_rows_to_string(&len);
     
     int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
-    ftruncate(fd, len);  //set file size to specific length
-    write(fd, buf, len);
-    close(fd);
+    if(fd != -1) {
+        if(ftruncate(fd, len) != -1)  //set file size to specific length
+            if(write(fd, buf, len) == len) {
+                editor_set_status_message("%d bytes written to disk", len);
+                E.dirty = 0;
+                close(fd);
+                free(buf);
+                return;
+            }
+        close(fd);
+    }
+    
     free(buf);
+    editor_set_status_message("Can't save! I/O error: %s", strerror(errno));
 }
 /*** append buffer ***/
 
@@ -430,7 +448,7 @@ void editor_draw_status_bar(struct abuf *ab)
     //m causes the text printed after it t be printed with various attributes
     abAppend(ab, "\x1b[7m", 4);
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No name]", E.numrows);
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", E.filename ? E.filename : "[No name]", E.numrows, E.dirty ? "(modified)" : "");
     if(len > E.screencols) len = E.screencols;
     int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
     abAppend(ab, status, len); 
@@ -537,6 +555,7 @@ void editor_move_cursor(int key)
 
 void editor_process_keypress() 
 {
+    static int quit_times = KILO_QUIT_TIMES;
     int c = editor_read_key();
 
     switch(c) {
@@ -544,6 +563,11 @@ void editor_process_keypress()
             break;
 
         case CTRL_KEY('q'):
+            if(E.dirty && quit_times > 0) {
+                editor_set_status_message("WARNING!!! File has unsaved changes. Press Ctrl-Q %d more times to quit.", quit_times);
+                quit_times--;
+                return;
+            }
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
@@ -552,7 +576,7 @@ void editor_process_keypress()
         case CTRL_KEY('s'):
             editor_save();
             break;
-            
+
         case HOME_KEY:
             E.cx = 0;
             break;
@@ -609,6 +633,7 @@ void init_editor()
     E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
+    E.dirty = 0;
     E.filename =  NULL;
     E.statusmsg[0] = '\0';
     E.statusmsg_time = 0;
@@ -624,7 +649,7 @@ int main(int argc, char *argv[])
     if(argc >= 2)
         editor_open(argv[1]);
 
-    editor_set_status_message("HELP: Ctrl-Q = quit");
+    editor_set_status_message("HELP: Ctrl-S = save | Ctrl-Q = quit");
 
     while(1) {
         editor_refresh_screen();
