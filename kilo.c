@@ -6,6 +6,7 @@
 
 #include<ctype.h>
 #include<errno.h>
+#include<fcntl.h>
 #include<stdarg.h>
 #include<stdio.h>
 #include<stdlib.h>
@@ -23,6 +24,7 @@
 
 #define CTRL_KEY(k) ((k) & 0x1f)  //a bit mask that sets bits 5 and 6 bits of the character to 0，which is exactly how CTRL works
 enum editorKey {
+    BACKSPACE = 127,
     ARROW_LEFT = 1000,
     ARROW_RIGHT,
     ARROW_UP,
@@ -220,6 +222,7 @@ int editor_row_cx_to_rx(erow *row, int cx)
 
 void editor_update_row(erow *row)
 {
+    //update rsize and render field
     int tabs = 0;
     int j = 0;
     for(j = 0; j < row->size; j++)
@@ -256,7 +259,48 @@ void editor_append_row(char *s, size_t len)
     E.numrows++;
 }
 
+void editor_row_insert_char(erow *row, int at, int c)
+{
+    if(at < 0 || at > row->size) at = row->size;
+    row->chars = realloc(row->chars, row->size + 2); //one for the new character, one for \0
+    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
+    row->size++;
+    row->chars[at] = c;
+    editor_update_row(row);
+}
+
+/*** editor operations ***/
+
+void editor_insert_char(int c)
+{
+    if(E.cy == E.numrows) {
+        editor_append_row("", 0);
+    }
+    editor_row_insert_char(&E.row[E.cy], E.cx, c);
+    E.cx++;
+}
+
 /*** file i/o ***/
+
+char * editor_rows_to_string(int *buflen) 
+{
+    int totlen = 0;
+    int j;
+    for(j = 0; j < E.numrows; j++)
+        totlen += E.row[j].size + 1;  // /r/n is stripped off when reading from file
+    *buflen = totlen;
+
+    char *buf = malloc(totlen);
+    char *p= buf;
+    for(j = 0; j < E.numrows; j++) {
+        memcpy(p, E.row[j].chars, E.row[j].size);
+        p += E.row[j].size;
+        *p = '\n';
+        p++;
+    }
+
+    return buf;
+}
 
 void editor_open(char *filename) 
 {
@@ -281,6 +325,19 @@ void editor_open(char *filename)
     fclose(fp);
 }
 
+void editor_save() 
+{
+    if(E.filename == NULL) return;
+
+    int len;
+    char *buf = editor_rows_to_string(&len);
+    
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+    ftruncate(fd, len);  //set file size to specific length
+    write(fd, buf, len);
+    close(fd);
+    free(buf);
+}
 /*** append buffer ***/
 
 struct abuf {
@@ -483,12 +540,19 @@ void editor_process_keypress()
     int c = editor_read_key();
 
     switch(c) {
+        case '\r':
+            break;
+
         case CTRL_KEY('q'):
-        write(STDOUT_FILENO, "\x1b[2J", 4);
-        write(STDOUT_FILENO, "\x1b[H", 3);
-        exit(0);
+            write(STDOUT_FILENO, "\x1b[2J", 4);
+            write(STDOUT_FILENO, "\x1b[H", 3);
+            exit(0);
         break;
 
+        case CTRL_KEY('s'):
+            editor_save();
+            break;
+            
         case HOME_KEY:
             E.cx = 0;
             break;
@@ -496,6 +560,11 @@ void editor_process_keypress()
         case END_KEY:
             if(E.cy < E.numrows)
                 E.cx = E.row[E.cy].size;
+            break;
+
+        case BACKSPACE:
+        case CTRL_KEY('h'):
+        case DEL_KEY:
             break;
 
         case PAGE_UP:
@@ -518,6 +587,14 @@ void editor_process_keypress()
         case ARROW_LEFT:
         case ARROW_RIGHT:
             editor_move_cursor(c);
+            break;
+
+        case CTRL_KEY('l'):
+        case '\x1b':
+            break;
+        
+        default:
+            editor_insert_char(c);
             break;
     }
 }
