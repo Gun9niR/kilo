@@ -67,6 +67,8 @@ struct editor_config E;
 /*** prototypes ***/
 
 void editor_set_status_message(const char *fmt, ...);
+void editor_move_cursor(int key);
+
 /*** terminal ***/
 
 void die(const char *s) {
@@ -265,6 +267,21 @@ void editor_append_row(char *s, size_t len)
     E.dirty++;
 }
 
+void editor_free_row(erow *row)
+{
+    free(row->chars);
+    free(row->render);
+}
+
+void editor_del_row(int at)
+{
+    if(at < 0 || at >= E.numrows) return;
+    editor_free_row(&E.row[at]);
+    memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
+    E.numrows--;
+    E.dirty++;
+}
+
 void editor_row_insert_char(erow *row, int at, int c)
 {
     if(at < 0 || at > row->size) at = row->size;
@@ -272,6 +289,25 @@ void editor_row_insert_char(erow *row, int at, int c)
     memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
     row->size++;
     row->chars[at] = c;
+    editor_update_row(row);
+    E.dirty++;
+}
+
+void editor_row_append_string(erow *row, char *s, size_t len)
+{
+    row->chars = realloc(row->chars, row->size + len + 1);
+    memcpy(&row->chars[row->size], s, len);
+    row->size += len;
+    row->chars[row->size] = '\0';
+    editor_update_row(row);
+    E.dirty++;
+}
+
+void editor_row_del_char(erow *row, int at)
+{
+    if(at < 0 || at >= row->size) return;
+    memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
+    row->size--;
     editor_update_row(row);
     E.dirty++;
 }
@@ -287,9 +323,27 @@ void editor_insert_char(int c)
     E.cx++;
 }
 
+void editor_del_char()
+{
+    //this function is like backspace
+    if(E.cy == E.numrows) return;
+    if(E.cx == 0 && E.cy == 0) return;
+
+    erow *row = &E.row[E.cy];
+    if(E.cx > 0) {
+        editor_row_del_char(row, E.cx - 1);
+        E.cx--;
+    } else {
+        E.cx = E.row[E.cy - 1].size;
+        editor_row_append_string(&E.row[E.cy - 1], row->chars, row->size);
+        editor_del_row(E.cy);
+        E.cy--;
+    }
+}
+
 /*** file i/o ***/
 
-char * editor_rows_to_string(int *buflen) 
+char *editor_rows_to_string(int *buflen) 
 {
     int totlen = 0;
     int j;
@@ -589,6 +643,8 @@ void editor_process_keypress()
         case BACKSPACE:
         case CTRL_KEY('h'):
         case DEL_KEY:
+            if(c == DEL_KEY) editor_move_cursor(ARROW_RIGHT);
+            editor_del_char();
             break;
 
         case PAGE_UP:
