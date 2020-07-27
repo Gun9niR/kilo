@@ -454,39 +454,76 @@ void editor_save()
 
 void editor_find_callback(char *query, int key)
 {
-    static int last_match = -1;
+    static int y_to_start = 0;
+    static int x_to_start = 0;
     static int direction = 1;
 
-    if(key == '\r' || key == '\x1b' || !strlen(query)) {
-        last_match = -1;
+    int len = strlen(query);
+    int switch_direction = 0;
+
+    if(key == '\r' || key == '\x1b' || !len) {
+        y_to_start = E.cy;
+        x_to_start = E.cx;
         direction = 1;
         return;
     } else if(key == ARROW_RIGHT || key == ARROW_DOWN) {
+        if(direction == -1)
+            switch_direction = 1;
         direction = 1;
     } else if(key == ARROW_LEFT || key == ARROW_UP) {
+        if(direction == 1)
+            switch_direction = 1;
         direction = -1;
     } else {
-        last_match = -1;
+        y_to_start = E.cy;
+        x_to_start = E.cx;
         direction = 1;
     }
 
-    if(last_match == -1) direction = 1;
-    int current = last_match;
-    int i;
-    for(i = 0; i < E.numrows; i++) {
-        current += direction;
-        if(current == -1) current = E.numrows - 1;
-        else if(current == E.numrows) current = 0;
+    if(y_to_start == 0) {
+        direction = 1;
+    }
 
-        erow *row = &E.row[current];
-        char *match = strstr(row->render, query);
-        if(match) {
-            last_match = current;
-            E.cy =current;
-            E.cx = editor_row_rx_to_cx(row, match - row->render);
-            E.rowoff = E.numrows;
-            break;
+    int current_y = y_to_start;
+    int lines_visited = 0;
+    while(lines_visited < E.numrows) {
+        erow *row = &E.row[current_y];
+        char *match = NULL;
+        if(direction == 1) {
+            if(switch_direction) {
+                x_to_start += len << 1;
+                switch_direction = 0;
+            }
+            if(x_to_start >= row->rsize || !(match = strstr(row->render + x_to_start, query))) {
+                lines_visited++;
+                current_y += direction;
+                if(current_y == -1) current_y = E.numrows - 1;
+                else if(current_y == E.numrows) current_y = 0;
+                x_to_start = 0;
+                continue;
+            }
+        } else {
+            if(switch_direction) {
+                x_to_start -= len << 1;
+                switch_direction = 0;
+            }
+            while(x_to_start >= 0 && strncmp(row->render + x_to_start, query, len))
+                x_to_start--;
+            if(x_to_start < 0) {
+                lines_visited++;
+                current_y += direction;
+                if(current_y == -1) current_y = E.numrows - 1;
+                else if(current_y == E.numrows) current_y = 0;
+                x_to_start = E.row[current_y].rsize - len;
+                continue;
+            }
         }
+
+        y_to_start = current_y;
+        x_to_start = direction == 1 ? match - row->render + len : x_to_start - len;
+        E.cy = current_y;
+        E.cx = direction == 1 ? editor_row_rx_to_cx(row, match - row->render) : editor_row_rx_to_cx(row, x_to_start + len);
+        return;
     }
 }
 
