@@ -39,8 +39,8 @@ enum editorKey {
 enum editor_highlight {
     HL_NORMAL,
     HL_COMMENT,
-    HL_KEYBOARD1,
-    HL_KEYBOARD2,
+    HL_KEYWORD1,
+    HL_KEYWORD2,
     HL_STRING,
     HL_NUMBER,
     HL_MATCH
@@ -272,6 +272,8 @@ void editor_update_syntax(erow *row)
 
     if(E.syntax == NULL) return;
 
+    char **keywords = E.syntax->keywords;
+
     char *scs = E.syntax->singleline_comment_start;
     int scs_len = scs ? strlen(scs) : 0;
 
@@ -313,7 +315,7 @@ void editor_update_syntax(erow *row)
             }
         }
 
-        //highlight numbers
+        //check for numbers
         if(E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
             if((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER)) {
                 row->hl[i] = HL_NUMBER;
@@ -323,6 +325,25 @@ void editor_update_syntax(erow *row)
             }
         }
 
+        if(prev_sep) {
+            int j;
+            for(j = 0; keywords[j]; j++) {
+                int klen = strlen(keywords[j]);
+                int kw2 = keywords[j][klen - 1] == '|';
+                if(kw2) klen--;
+
+                if(!strncmp(&row->render[i], keywords[j], klen) &&
+                   is_separator(row->render[i + klen])) {
+                       memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, klen);
+                       i += klen;
+                       break;
+                   }
+            }
+            if(keywords[j] != NULL) {
+                prev_sep = 0;
+                continue;
+            }
+        }
         prev_sep = is_separator(c);
         i++;
     }
@@ -783,7 +804,18 @@ void editor_draw_rows(struct abuf *ab)
             int current_color = -1;
             int j;
             for(j = 0; j < len; j++) {
-                if(hl[j] == HL_NORMAL) {
+                if(iscntrl(c[j])) {
+                    char sym = (c[j] <= 26 ? '@' + c[j] : '?');
+                    abAppend(ab, "\x1b[7m", 4);
+                    abAppend(ab, &sym, 1);
+                    abAppend(ab, "\x1b[m", 3);
+                    //x1b[m turns off all text formatting, so need to recolor the text
+                    if(current_color != -1) {
+                        char buf[16];
+                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
+                        abAppend(ab, buf, clen);
+                    }
+                } else if(hl[j] == HL_NORMAL) {
                     if(current_color != -1) {
                         abAppend(ab, "\x1b[39m", 5);
                         current_color = -1;
