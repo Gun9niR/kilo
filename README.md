@@ -1,5 +1,5 @@
 # Kilo
-Kilo is a trivial text editor that implements all the basic features you can expect in a minimal editor without dependencies on any external libs.
+Kilo is a trivial text editor that implements some fundamental features of a editor without dependencies on any external libs.
 
 ## Features
 - Open & save (one file at a time)
