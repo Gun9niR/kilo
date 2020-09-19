@@ -16,5 +16,5 @@ To compile, run `make` in the terminal.
 To fire up Kilo, run `./kilo (optional)"filename"`, for instance, `./kilo kilo.c`. You can create a new file by feeding no argument to it.
 ## To-do list
 - [ ] Config file
-- [ ] Line numbers
+- [x] Line numbers
 - [ ] Auto indent
