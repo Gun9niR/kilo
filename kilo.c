@@ -22,7 +22,7 @@
 #define KILO_VERSION "0.0.1"
 #define KILO_TAB_STOP 8
 #define KILO_QUIT_TIMES 3
-#define CTRL_KEY(k) ((k) & 0x1f)  //a bit mask that sets bits 5 and 6 bits of the character to 0，which is exactly how CTRL works
+#define CTRL_KEY(k) ((k) & 0x1f)  //a bit mask that sets bits 5 and 6 bits of the character to 0, which is exactly how CTRL works
 enum editorKey {
     BACKSPACE = 127,
     ARROW_LEFT = 1000,
@@ -81,6 +81,7 @@ struct editor_config {
     int screenrows;
     int screencols;
     int numrows;
+    int row_num_offset;
     erow *row;
     int dirty;
     char *filename;
@@ -433,6 +434,15 @@ void editor_select_syntax_highlight()
 }
 /*** row operations ***/
 
+int deciLength(int num) {
+    int ret = 0;
+    if(!num) return 1;
+    do {
+        ++ret;
+    } while(num /= 10);
+    return ret;
+}
+
 int editor_row_cx_to_rx(erow *row, int cx)
 {
     int rx = 0;
@@ -483,6 +493,12 @@ void editor_update_row(erow *row)
     editor_update_syntax(row);
 }
 
+void editor_update_row_offset() {
+    E.screencols += (E.row_num_offset + 1);
+    E.row_num_offset = deciLength(E.numrows);
+    E.screencols -= (E.row_num_offset + 1);
+}
+
 void editor_insert_row(int at, char *s, size_t len)
 {
     if(at < 0 || at > E.numrows) return;
@@ -503,6 +519,7 @@ void editor_insert_row(int at, char *s, size_t len)
     E.row[at].hl_open_comment = 0;
     editor_update_row(&E.row[at]);
     E.numrows++;
+    editor_update_row_offset();
     E.dirty++;
 }
 
@@ -642,6 +659,7 @@ void editor_open(char *filename)
             linelen--;
         editor_insert_row(E.numrows, line, linelen);
     }
+    editor_update_row_offset();
     free(line);
     fclose(fp);
     E.dirty = 0;
@@ -813,7 +831,7 @@ void editor_scroll()
     if(E.cy >= E.rowoff + E.screenrows) //scroll downwards
         E.rowoff = E.cy - E.screenrows + 1;  //cursor is at the bottom
     if(E.rx < E.coloff)
-        E.rowoff = E.rx;
+        E.coloff = E.rx;
     if(E.rx >= E.coloff + E.screencols)
         E.coloff = E.rx - E.screencols + 1;    
 }
@@ -827,11 +845,11 @@ void editor_draw_rows(struct abuf *ab)
         int filerow = y + E.rowoff;
 
         if(filerow >= E.numrows) {
-            if(E.numrows == 0 && y == E.screenrows / 3) {
+            if(E.numrows == 0 && y == E.screenrows / 3) { // the row for the welcome message
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION);
                 if(welcomelen > E.screencols) welcomelen = E.screencols;
-                //center the welcome message
+                // center the welcome message
                 int padding = (E.screencols - welcomelen) / 2;
                 if(padding) {
                     abAppend(ab, "~", 1);
@@ -843,6 +861,10 @@ void editor_draw_rows(struct abuf *ab)
             else
                 abAppend(ab, "~" , 1);
         } else {
+            char linenum[32];
+            snprintf(linenum, sizeof(linenum), "%*d ", E.row_num_offset, filerow + 1);
+            abAppend(ab, linenum, strlen(linenum));
+
             int len = E.row[filerow].rsize - E.coloff;
             if(len < 0) len = 0;
             if(len > E.screencols) len = E.screencols;
@@ -880,11 +902,8 @@ void editor_draw_rows(struct abuf *ab)
                     abAppend(ab, &c[j], 1);
                 }
             }
-#ifdef _LINE_NUM
-            char linenum[32];
-            snprintf(linenum, sizeof(linenum), "%d ", filerow + 1);
-            abAppend(ab, linenum, strlen(linenum));
-#endif
+
+
             abAppend(ab, "\x1b[39m", 5);
         }
         //clear each line as we redraw them instead of clearing the entire page
@@ -903,8 +922,8 @@ void editor_draw_status_bar(struct abuf *ab)
     if(len > E.screencols) len = E.screencols;
     int rlen = snprintf(rstatus, sizeof(rstatus), "%s | %d/%d", E.syntax ? E.syntax->filetype : "no ft",E.cy + 1, E.numrows);
     abAppend(ab, status, len); 
-    while(len < E.screencols) {
-        if(E.screencols - len == rlen) {
+    while(len < E.screencols + E.row_num_offset) {
+        if(E.screencols + E.row_num_offset - len == rlen) {
             abAppend(ab, rstatus, rlen);
             break;
         } else {
@@ -934,7 +953,7 @@ void editor_refresh_screen()
     //"?25l" hides the cursor when refreshing the screen to prevent flickering
     abAppend(&ab, "\x1b[?25l", 6);
 
-    //'H' positions the cursor. It takes to arguments, specifying the line and column, say "/x1b[1;1H"
+    //'H' positions the cursor. It takes two arguments, specifying the line and column, say "/x1b[1;1H"
     //Line and column number start at 1
     abAppend(&ab, "\x1b[H", 3);
     
@@ -943,7 +962,7 @@ void editor_refresh_screen()
     editor_draw_message_bar(&ab);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff + E.row_num_offset + 1) + 1);
     abAppend(&ab, buf, strlen(buf));
 
     //"?25h" shows the cursor after refreshing
@@ -1135,6 +1154,7 @@ void init_editor()
     E.statusmsg[0] = '\0';
     E.statusmsg_time = 0;
     E.syntax = NULL;
+    E.row_num_offset = 0;
 
     if(get_window_size(&E.screenrows, &E.screencols) == -1) die("get_window_size");
     E.screenrows -= 2;
