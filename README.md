@@ -14,7 +14,9 @@ Since the program uses <terminos.h> to interact with the terminal at a low level
 To compile, run `make` in the terminal.
 
 To fire up Kilo, run `./kilo (optional)"filename"`, for instance, `./kilo kilo.c`. You can create a new file by feeding no argument to it.
+
+Note: Kilo does NOT support UTF-8, so don't type in Chinese.
 ## To-do list
-- [ ] Config file
+- [x] Config file
 - [x] Line numbers
 - [ ] Auto indent
