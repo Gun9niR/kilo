@@ -19,4 +19,4 @@ Note: Kilo does NOT support UTF-8, so don't type in Chinese.
 ## To-do list
 - [x] Config file
 - [x] Line numbers
-- [ ] Auto indent
+- [x] Auto indent

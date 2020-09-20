@@ -20,7 +20,7 @@
 
 /*** defines ***/
 
-#define KILO_VERSION "0.0.2"
+#define KILO_VERSION "0.0.3"
 
 #define ENABLE_LINE_NUM (1 << 0)
 #define ENABLE_AUTO_INDENT (1 << 1)
@@ -571,7 +571,7 @@ void editor_update_row_offset() {
     E.screencols -= (E.row_num_offset + 1);
 }
 
-void editor_insert_row(int at, char *s, size_t len)
+void editor_insert_row(int at, char *s, size_t len, int leading_sps)
 {
     if(at < 0 || at > E.numrows) return;
 
@@ -580,10 +580,13 @@ void editor_insert_row(int at, char *s, size_t len)
     for(int j = at + 1; j <= E.numrows; j++) E.row[j].idx++;
 
     E.row[at].idx= at;
-    E.row[at].size = len;
-    E.row[at].chars = malloc(len + 1);
-    memcpy(E.row[at].chars, s, len);
-    E.row[at].chars[len] = '\0';
+    E.row[at].size = len + leading_sps;
+    E.row[at].chars = malloc(len + leading_sps + 1);
+    for(int i = 0; i < leading_sps; ++i) {
+        E.row[at].chars[i] = ' ';
+    }
+    memcpy(E.row[at].chars + leading_sps, s, len);
+    E.row[at].chars[len + leading_sps] = '\0';
 
     E.row[at].rsize = 0;
     E.row[at].render = NULL;
@@ -650,7 +653,7 @@ void editor_row_del_char(erow *row, int at)
 void editor_insert_char(int c)
 {
     if(E.cy == E.numrows) {
-        editor_insert_row(E.numrows, "", 0);
+        editor_insert_row(E.numrows, "", 0, 0);
     }
     editor_row_insert_char(&E.row[E.cy], E.cx, c);
     E.cx++;
@@ -674,20 +677,30 @@ void editor_del_char()
     }
 }
 
-void editor_insert_new_line()
+int get_leading_sps(int line) {
+    int i;
+    for(i = 0; E.row[line].render[i] == ' '; ++i);
+    return i;
+}
+
+void editor_insert_new_line() // create a new line when typeing enter
 {
+    int leading_sps = 0;
+    if(E.options & ENABLE_AUTO_INDENT) {
+        leading_sps = get_leading_sps(E.cy);
+    }
     if(E.cx == 0) {
-        editor_insert_row(E.cy, "", 0);
+        editor_insert_row(E.cy, "", 0, leading_sps);
     } else {
         erow *row = &E.row[E.cy];
-        editor_insert_row(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
+        editor_insert_row(E.cy + 1, &row->chars[E.cx], row->size - E.cx, leading_sps);
         row = &E.row[E.cy];
         row->size = E.cx;
         row->chars[row->size] = '\0';
         editor_update_row(row);
     }
     E.cy++;
-    E.cx = 0;
+    E.cx = leading_sps;
 }
 
 /*** file i/o ***/
@@ -731,7 +744,7 @@ void editor_open(char *filename)
         //strip off return carriage
         while(linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
             linelen--;
-        editor_insert_row(E.numrows, line, linelen);
+        editor_insert_row(E.numrows, line, linelen, 0); // no auto indent needed
     }
     if(E.options & ENABLE_LINE_NUM) {
         editor_update_row_offset();
