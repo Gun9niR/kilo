@@ -8,6 +8,7 @@
 #include<errno.h>
 #include<fcntl.h>
 #include<stdarg.h>
+#include<stdint.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
@@ -19,9 +20,11 @@
 
 /*** defines ***/
 
-#define KILO_VERSION "0.0.1"
-#define KILO_TAB_STOP 8
-#define KILO_QUIT_TIMES 3
+#define KILO_VERSION "0.0.2"
+
+#define ENABLE_LINE_NUM (1 << 0)
+#define ENABLE_AUTO_INDENT (1 << 1)
+
 #define CTRL_KEY(k) ((k) & 0x1f)  //a bit mask that sets bits 5 and 6 bits of the character to 0, which is exactly how CTRL works
 enum editorKey {
     BACKSPACE = 127,
@@ -84,11 +87,16 @@ struct editor_config {
     int row_num_offset;
     erow *row;
     int dirty;
+    int quit_times;
     char *filename;
     char statusmsg[80];
+    uint8_t options;
     time_t statusmsg_time;
     struct editor_syntax *syntax;
     struct termios orig_terminos;
+
+    int KILO_TAB_STOP;
+    int KILO_QUIT_TIMES;
 };
 
 struct editor_config E;
@@ -265,6 +273,70 @@ int get_window_size(int *rows, int *cols)
     }
 }
 
+/*** init ***/
+
+int get_int(char *p) {
+    int ret = 0;
+    while(*p && *p != '\r' && *p != '\n') {
+        ret = ret * 10 + *p - '0';
+        p++;
+    }
+    return ret;
+}
+
+void read_config_file() {
+    FILE *fp = fopen("config.kilorc", "r");
+    if(!fp) return;
+
+    char *line = NULL;
+    char *p;
+    size_t linecap = 0;
+    ssize_t linelen;
+    while((linelen = getline(&line, &linecap, fp)) != -1) {
+        if(strstr(line, "LineNumbers") != NULL) {
+            p = line + strlen("LineNumbers") + 1;
+            if(*p == '1') {
+                E.options |= ENABLE_LINE_NUM;
+            }
+        } else if(strstr(line, "AutoIndent") != NULL) {
+            p = line + strlen("AutoIndent") + 1;
+            if(*p == '1') {
+                E.options |= ENABLE_AUTO_INDENT;
+            }
+        } else if(strstr(line, "TabStop") != NULL) {
+            p = line + strlen("TabStop") + 1;
+            E.KILO_TAB_STOP = get_int(p);
+        } else if(strstr(line, "QuitTimes") != NULL) {
+            p = line + strlen("QuitTimes") + 1;
+            E.KILO_QUIT_TIMES = get_int(p);
+        }
+    }
+}
+
+void init_editor() 
+{
+    E.cx = 0;
+    E.cy = 0;
+    E.rx = 0;
+    E.rowoff = 0;  //scroll to the top of the file by default
+    E.coloff = 0;
+    E.numrows = 0;
+    E.row = NULL;
+    E.dirty = 0;
+    E.filename =  NULL;
+    E.statusmsg[0] = '\0';
+    E.statusmsg_time = 0;
+    E.syntax = NULL;
+    E.row_num_offset = 0;
+    E.options = 0;
+    if(get_window_size(&E.screenrows, &E.screencols) == -1) die("get_window_size");
+    E.screenrows -= 2;
+    E.KILO_QUIT_TIMES = 3;
+    E.KILO_TAB_STOP = 8;
+    read_config_file();
+    E.quit_times = E.KILO_QUIT_TIMES;
+}
+
 /*** sytax highlighting ***/
 
 int is_separator(int c) 
@@ -275,7 +347,7 @@ int is_separator(int c)
 void editor_update_syntax(erow *row)
 {
     row->hl = realloc(row->hl, row->rsize);
-    memset(row->hl, HL_NORMAL, row->size);
+    memset(row->hl, HL_NORMAL, row->rsize);
 
     if(E.syntax == NULL) return;
 
@@ -294,7 +366,7 @@ void editor_update_syntax(erow *row)
     bool in_comment = (row->idx > 0 && E.row[row->idx - 1].hl_open_comment);
 
     int i = 0;
-    while(i < row->size) {
+    while(i < row->rsize) {
         char c = row->render[i];
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
 
@@ -310,7 +382,7 @@ void editor_update_syntax(erow *row)
         //check for multiline comment
         if(mcs_len && mce_len && !in_string) {
             if(in_comment) {
-                row->hl[i] =HL_MLCOMMENT;
+                row->hl[i] = HL_MLCOMMENT;
                 if(!strncmp(&row->render[i], mce, mce_len)) {
                     memset(&row->hl[i], HL_MLCOMMENT, mce_len);
                     i += mce_len;
@@ -361,7 +433,7 @@ void editor_update_syntax(erow *row)
             }
         }
 
-        //check for keywordss
+        //check for keywords
         if(prev_sep) {
             int j;
             for(j = 0; keywords[j]; j++) {
@@ -449,7 +521,7 @@ int editor_row_cx_to_rx(erow *row, int cx)
     int j;
     for(j = 0; j < cx; j++) {
         if(row->chars[j] == '\t')
-            rx += (KILO_TAB_STOP - 1) - (rx % KILO_TAB_STOP);
+            rx += (E.KILO_TAB_STOP - 1) - (rx % E.KILO_TAB_STOP);
         rx++;
     }
     return rx;
@@ -461,7 +533,7 @@ int editor_row_rx_to_cx(erow *row, int rx)
     int cx;
     for(cx = 0; cx < row->size; cx++) {
         if(row->chars[cx] == '\t')
-            cur_rx += (KILO_TAB_STOP - 1) - (cur_rx % KILO_TAB_STOP);
+            cur_rx += (E.KILO_TAB_STOP - 1) - (cur_rx % E.KILO_TAB_STOP);
         cur_rx++;
         if(cur_rx > rx) return cx;
     }
@@ -477,13 +549,13 @@ void editor_update_row(erow *row)
         if(row->chars[j] == '\t') tabs++;
     
     free(row->render); //it's Ok to free a NULL pointer
-    row->render = malloc(row->size + tabs * (KILO_TAB_STOP - 1) + 1); //row->size already counts 1 for each tab
+    row->render = malloc(row->size + tabs * (E.KILO_TAB_STOP - 1) + 1); //row->size already counts 1 for each tab
 
     int idx = 0;
     for(j = 0; j <row->size; j++) {
         if(row->chars[j] == '\t') {
             row->render[idx++] = ' ';
-            while(idx % KILO_TAB_STOP != 0) row->render[idx++] = ' ';
+            while(idx % E.KILO_TAB_STOP != 0) row->render[idx++] = ' ';
         } else 
             row->render[idx++] = row->chars[j];
     }
@@ -519,7 +591,9 @@ void editor_insert_row(int at, char *s, size_t len)
     E.row[at].hl_open_comment = 0;
     editor_update_row(&E.row[at]);
     E.numrows++;
-    editor_update_row_offset();
+    if(E.options & ENABLE_LINE_NUM) {
+        editor_update_row_offset();
+    }
     E.dirty++;
 }
 
@@ -659,7 +733,9 @@ void editor_open(char *filename)
             linelen--;
         editor_insert_row(E.numrows, line, linelen);
     }
-    editor_update_row_offset();
+    if(E.options & ENABLE_LINE_NUM) {
+        editor_update_row_offset();
+    }
     free(line);
     fclose(fp);
     E.dirty = 0;
@@ -861,9 +937,11 @@ void editor_draw_rows(struct abuf *ab)
             else
                 abAppend(ab, "~" , 1);
         } else {
-            char linenum[32];
-            snprintf(linenum, sizeof(linenum), "%*d ", E.row_num_offset, filerow + 1);
-            abAppend(ab, linenum, strlen(linenum));
+            if(E.options & ENABLE_LINE_NUM) {
+                char linenum[32];
+                snprintf(linenum, sizeof(linenum), "%*d ", E.row_num_offset, filerow + 1);
+                abAppend(ab, linenum, strlen(linenum));
+            }
 
             int len = E.row[filerow].rsize - E.coloff;
             if(len < 0) len = 0;
@@ -962,7 +1040,8 @@ void editor_refresh_screen()
     editor_draw_message_bar(&ab);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff + E.row_num_offset + 1) + 1);
+    bool line_num_enabled = E.options & ENABLE_LINE_NUM;
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff + E.row_num_offset + (line_num_enabled != 0 ? 1 : 0)) + 1);
     abAppend(&ab, buf, strlen(buf));
 
     //"?25h" shows the cursor after refreshing
@@ -1064,7 +1143,6 @@ void editor_move_cursor(int key)
 
 void editor_process_keypress() 
 {
-    static int quit_times = KILO_QUIT_TIMES;
     int c = editor_read_key();
 
     switch(c) {
@@ -1073,9 +1151,9 @@ void editor_process_keypress()
             break;
 
         case CTRL_KEY('q'):
-            if(E.dirty && quit_times > 0) {
-                editor_set_status_message("WARNING!!! File has unsaved changes. Press Ctrl-Q %d more times to quit.", quit_times);
-                quit_times--;
+            if(E.dirty && E.quit_times > 0) {
+                editor_set_status_message("WARNING!!! File has unsaved changes. Press Ctrl-Q %d more times to quit.", E.quit_times);
+                E.quit_times--;
                 return;
             }
             write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -1139,27 +1217,6 @@ void editor_process_keypress()
     }
 }
 
-/*** init ***/
-void init_editor() 
-{
-    E.cx = 0;
-    E.cy = 0;
-    E.rx = 0;
-    E.rowoff = 0;  //scroll to the top of the file by default
-    E.coloff = 0;
-    E.numrows = 0;
-    E.row = NULL;
-    E.dirty = 0;
-    E.filename =  NULL;
-    E.statusmsg[0] = '\0';
-    E.statusmsg_time = 0;
-    E.syntax = NULL;
-    E.row_num_offset = 0;
-
-    if(get_window_size(&E.screenrows, &E.screencols) == -1) die("get_window_size");
-    E.screenrows -= 2;
-}
-
 int main(int argc, char *argv[]) 
 {
     enable_raw_mode();
@@ -1173,6 +1230,6 @@ int main(int argc, char *argv[])
         editor_refresh_screen();
         editor_process_keypress();
     }
-    
+
     return 0;
 }
