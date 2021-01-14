@@ -285,7 +285,7 @@ int get_int(char *p) {
 }
 
 void read_config_file() {
-    FILE *fp = fopen("config.kilorc", "r");
+    FILE *fp = fopen(".kilorc", "r");
     if(!fp) return;
 
     char *line = NULL;
